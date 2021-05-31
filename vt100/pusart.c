@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "vt100.h"
+#include "xsdl.h"
 
 // Intel 8251 USART.
 
@@ -134,13 +135,21 @@ static void decode_stop (int bit, int cycles)
   decode_bit (bit, 0);
 }
 
+static u8 waveform[800];
+
 static void encode_character (u8 data)
 {
   int i;
   decode_bit (0, data_cycles);
-  for (i = 0; i < char_size; i++, data >>= 1)
+  memset (waveform, 0, data_cycles / 144);
+  for (i = 0; i < char_size; i++, data >>= 1) {
     decode_bit (data & 1, data_cycles);
+    memset (waveform + (i + 1) * data_cycles / 144,
+            data & 1, data_cycles / 144);
+  }
   decode_bit (1, stop_cycles);
+  memset (waveform + 9 * data_cycles / 144, 1, stop_cycles / 144);
+  sdl_rx (waveform, 9 * (data_cycles + stop_cycles) / 144);
 }
 
 static int receiver (void *arg)

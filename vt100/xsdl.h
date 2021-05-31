@@ -18,3 +18,4 @@ extern void sdl_render (int brightness, int columns);
 extern void draw_line (int scroll, int attr, int y, u8 *data);
 extern void sdl_capslock (u8 code);
 extern void sdl_sound (u8 *data, int size);
+extern void sdl_rx (u8 *data, int size);

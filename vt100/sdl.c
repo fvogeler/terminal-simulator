@@ -15,11 +15,50 @@ static SDL_Renderer *sound_renderer;
 static u8 sound_buffer[800];
 static int sound_pointer = 0;
 
+#define SERIAL_WIDTH 800
+#define SERIAL_SCALE 5
+static SDL_Window *serial_window = NULL;
+static SDL_Renderer *serial_renderer;
+static u8 rx_buffer[SERIAL_WIDTH / SERIAL_SCALE];
+static u8 tx_buffer[SERIAL_WIDTH / SERIAL_SCALE];
+static int rx_pointer = 0;
+static int tx_pointer = 0;
+
+#define EVENT_DISPLAY (userevent + 0)
+#define EVENT_RENDER  (userevent + 1)
+#define EVENT_SOUND   (userevent + 2)
+#define EVENT_RX      (userevent + 3)
+#define EVENT_TX      (userevent + 4)
+
 void sdl_sound (u8 *data, int size)
 {
   SDL_Event ev;
   SDL_zero (ev);
-  ev.type = userevent + 2;
+  ev.type = EVENT_SOUND;
+  ev.user.data1 = malloc (size);
+  ev.user.data2 = malloc (sizeof size);
+  memcpy (ev.user.data1, data, size);
+  *(int *)ev.user.data2 = size;
+  SDL_PushEvent (&ev);
+}
+
+void sdl_rx (u8 *data, int size)
+{
+  SDL_Event ev;
+  SDL_zero (ev);
+  ev.type = EVENT_RX;
+  ev.user.data1 = malloc (size);
+  ev.user.data2 = malloc (sizeof size);
+  memcpy (ev.user.data1, data, size);
+  *(int *)ev.user.data2 = size;
+  SDL_PushEvent (&ev);
+}
+
+void sdl_tx (u8 *data, int size)
+{
+  SDL_Event ev;
+  SDL_zero (ev);
+  ev.type = EVENT_TX;
   ev.user.data1 = malloc (size);
   ev.user.data2 = malloc (sizeof size);
   memcpy (ev.user.data1, data, size);
@@ -59,6 +98,67 @@ static void draw_sound (u8 *data, int *size)
   free (size);
 }
 
+static void draw_serial (void)
+{
+  int i;
+
+  if (serial_window == NULL) {
+    SDL_CreateWindowAndRenderer (SERIAL_WIDTH, 256, 0,
+				 &serial_window, &serial_renderer);
+    SDL_SetWindowTitle (serial_window, "VT100 Serial");
+  }
+
+  SDL_SetRenderDrawColor (serial_renderer, 0, 0, 0, 255);
+  SDL_RenderClear (serial_renderer);
+  SDL_SetRenderDrawColor (serial_renderer, 0, 255, 0, 255);
+  for (i = 1; i < sizeof rx_buffer; i++) {
+    SDL_RenderDrawLine (serial_renderer,
+			SERIAL_SCALE * (i - 1), 20 * rx_buffer[i - 1] + 10,
+			SERIAL_SCALE * (i - 1), 20 * rx_buffer[i] + 10);
+    SDL_RenderDrawLine (serial_renderer,
+			SERIAL_SCALE * (i - 1), 20 * rx_buffer[i] + 10,
+			SERIAL_SCALE * i, 20 * rx_buffer[i] + 10);
+  }
+  for (i = 1; i < sizeof tx_buffer; i++)
+    ;
+  SDL_SetRenderDrawColor (serial_renderer, 100, 100, 100, 255);
+  for (i = 0; i < SERIAL_WIDTH; i += 48)
+    SDL_RenderDrawLine (serial_renderer, i, 0, i, 255);
+  for (i = 0; i < 256; i += 48)
+    SDL_RenderDrawLine (serial_renderer, 0, i, SERIAL_WIDTH - 1, i);
+  SDL_RenderPresent (serial_renderer);
+}
+
+static void draw_rx (u8 *data, int *size)
+{
+  int i;
+  for (i = 0; i < *size; i++) {
+    rx_buffer[rx_pointer] = data[i];
+    if (rx_buffer[rx_pointer] > 3)
+      rx_buffer[rx_pointer] -= rand() & 3;
+    rx_pointer++;
+    rx_pointer %= sizeof rx_buffer;
+  }
+  draw_serial ();
+  free (data);
+  free (size);
+}
+
+static void draw_tx (u8 *data, int *size)
+{
+  int i;
+  for (i = 0; i < *size; i++) {
+    tx_buffer[tx_pointer] = data[i];
+    if (tx_buffer[tx_pointer] > 3)
+      tx_buffer[tx_pointer] -= rand() & 3;
+    tx_pointer++;
+    tx_pointer %= sizeof tx_buffer;
+  }
+  draw_serial ();
+  free (data);
+  free (size);
+}
+
 void draw_line (int scroll, int attr, int y, u8 *data)
 {
   int i;
@@ -73,7 +173,7 @@ void sdl_refresh (struct draw *data)
 {
   SDL_Event ev;
   SDL_zero (ev);
-  ev.type = userevent;
+  ev.type = EVENT_DISPLAY;
   ev.user.data1 = data;
   SDL_PushEvent (&ev);
 }
@@ -87,7 +187,7 @@ void sdl_render (int brightness, int columns)
   draw_data.brightness = brightness;
   draw_data.renderer = renderer;
   SDL_zero (ev);
-  ev.type = userevent + 1;
+  ev.type = EVENT_RENDER;
   ev.user.data1 = &draw_data;
   SDL_PushEvent (&ev);
 }
@@ -177,7 +277,7 @@ void sdl_init (int scale, int full)
     toggle_fullscreen ();
   screentex = SDL_CreateTexture (renderer, SDL_PIXELFORMAT_RGB888,
                                  SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
-  userevent = SDL_RegisterEvents (3);
+  userevent = SDL_RegisterEvents (5);
   memset (a, 0, sizeof a);
 
   meta = nothing;
@@ -331,12 +431,16 @@ void sdl_loop (void)
       break;
 
     default:
-      if (ev.type == userevent)
+      if (ev.type == EVENT_DISPLAY)
 	draw (ev.user.data1);
-      else if (ev.type == userevent + 1)
+      else if (ev.type == EVENT_RENDER)
 	reset_render (ev.user.data1);
-      else if (ev.type == userevent + 2)
+      else if (ev.type == EVENT_SOUND)
 	draw_sound (ev.user.data1, ev.user.data2);
+      else if (ev.type == EVENT_RX)
+	draw_rx (ev.user.data1, ev.user.data2);
+      else if (ev.type == EVENT_TX)
+	draw_tx (ev.user.data1, ev.user.data2);
       break;
     }
   }
